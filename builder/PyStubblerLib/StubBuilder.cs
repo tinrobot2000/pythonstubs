@@ -27,7 +27,8 @@ namespace PyStubblerLib
 
             // extract types
             Type[] typesToStub = assemblyToStub.GetExportedTypes();
-            string rootNamespace = typesToStub[0].Namespace.Split('.')[0];
+            //string rootNamespace = typesToStub[0].Namespace.Split('.')[0];  // this. needs to be the assembly name
+            string rootNamespace = assemblyToStub.GetName().Name;
 
             // prepare output directory
             DirectoryInfo stubsDirectory;
@@ -54,7 +55,7 @@ namespace PyStubblerLib
             }
 
             List<string> namespaces = new List<string>(stubDictionary.Keys);
-
+            // Top level Assembly WriteStubList here
             // generate stubs for each type
             foreach (var stubList in stubDictionary.Values)
                 WriteStubList(stubsDirectory, namespaces.ToArray(), stubList);
@@ -137,7 +138,7 @@ namespace PyStubblerLib
 
             string[] ns = stubTypes[0].Namespace.Split('.');
             string path = rootDirectory.FullName;
-            for (int i = 1; i < ns.Length; i++)
+            for (int i = 1; i < ns.Length; i++)  // review this line - it's skipping singleton namespaces
                 path = Path.Combine(path, ns[i]);
 
             if (!Directory.Exists(path))
@@ -147,8 +148,8 @@ namespace PyStubblerLib
 
             var sb = new System.Text.StringBuilder();
 
-            string[] allChildNamespaces = GetChildNamespaces(stubTypes[0].Namespace, allNamespaces);
-            if( allChildNamespaces.Length>0 )
+            string[] allChildNamespaces = GetChildNamespaces(stubTypes[0].Namespace, allNamespaces);  // here?
+            if( allChildNamespaces.Length>0 ) // here
             {
                 sb.Append("__all__ = [");
                 for(int i=0; i<allChildNamespaces.Length; i++)
