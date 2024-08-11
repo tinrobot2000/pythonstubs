@@ -2,6 +2,7 @@
 using System.Reflection;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 
 namespace PyStubblerLib
 {
@@ -27,7 +28,6 @@ namespace PyStubblerLib
 
             // extract types
             Type[] typesToStub = assemblyToStub.GetExportedTypes();
-            //string rootNamespace = typesToStub[0].Namespace.Split('.')[0];  // this. needs to be the assembly name
             string rootNamespace = assemblyToStub.GetName().Name;
 
             // prepare output directory
@@ -44,7 +44,40 @@ namespace PyStubblerLib
                 else
                     stubsDirectory = Directory.CreateDirectory(Path.Combine(destPath, extendedRootNS));
             }
+            // process by stubs
+            // sort
+            Array.Sort(typesToStub, (a, b) => { return a.FullName.CompareTo(b.FullName); });
 
+            foreach (var stubType in typesToStub)
+            {
+                // build directories
+                string[] namespaces = stubType.Namespace.Split('.');
+                string path = stubsDirectory.FullName;
+
+                for (int i = 0; i < namespaces.Length; i++)
+                {
+                    path = Path.Combine(path, namespaces[i]);
+
+                    if (!Directory.Exists(path))
+                        Directory.CreateDirectory(path);
+                }
+
+                if (!File.Exists(Path.Combine(path, "__init__.pyi")))
+                {
+                    NewStubList(path, stubType);
+                }
+                else
+                {
+                    AppendStubList(path, stubType);
+                }
+                
+            }
+            
+            // Create final __init__.pyi at top level
+
+                
+
+#if false
             // build type db
             var stubDictionary = new Dictionary<string, List<Type>>();
             foreach (var stubType in typesToStub)
@@ -58,6 +91,7 @@ namespace PyStubblerLib
             // Top level Assembly WriteStubList here
             // generate stubs for each type
             foreach (var stubList in stubDictionary.Values)
+                //var stubNamespace = stubList
                 WriteStubList(stubsDirectory, namespaces.ToArray(), stubList);
 
             // update the setup.py version with the matching version of the assembly
@@ -95,9 +129,9 @@ namespace PyStubblerLib
                 File.WriteAllText(requirementsPath, contents.ToString());
             }
 
+#endif
             return stubsDirectory.FullName;
         }
-
         private static Assembly AssemblyResolve(object sender, ResolveEventArgs args)
         {
             string assemblyToResolve = args.Name.Substring(0, args.Name.IndexOf(',')) + ".dll";
@@ -130,6 +164,204 @@ namespace PyStubblerLib
             return childNamespaces.ToArray();
         }
 
+        private static void NewStubList(string stubDirectory, Type stubType)
+        {
+            var sb = new System.Text.StringBuilder();
+            string[] subDirectories = Directory.GetDirectories(stubDirectory);
+
+            if (subDirectories.Length > 0)
+            {
+                sb.Append("__all__ = [");
+                sb.Append("'" + string.Join("', '", subDirectories) + "'");
+                sb.AppendLine("]");
+            }
+
+            sb.AppendLine("from typing import Tuple, Set, Iterable, List, overload");   
+
+            AppendStubList(stubDirectory, stubType, sb);
+
+        }
+
+        private static void AppendStubList(string stubDirectory, Type stubType, StringBuilder sb = null)
+        {
+           if (sb is null)
+            {
+                // open __init__.pyi
+                // check if __all__ is present and append any changes
+            }
+
+            var obsolete = stubType.GetCustomAttribute(typeof(System.ObsoleteAttribute));
+
+            // work on control flow here
+            if (obsolete != null ||
+                stubType.IsGenericType)
+            {
+                // Stop processing here
+            }
+            else if (stubType.IsEnum)
+            {
+                sb.AppendLine($"class {stubType.Name}:");
+                var names = Enum.GetNames(stubType);
+                var values = Enum.GetValues(stubType);
+                for (int i = 0; i < names.Length; i++)
+                {
+                    string name = names[i];
+                    if (name.Equals("None", StringComparison.Ordinal))
+                        name = $"#{name}";
+
+                    object val = Convert.ChangeType(values.GetValue(i), Type.GetTypeCode(stubType));
+                    sb.AppendLine($"    {name} = {val}");
+                }
+                // Stop here & save
+            }
+
+            if (stubType.BaseType != null &&
+              stubType.BaseType.FullName.IndexOf('+') < 0 &&
+              stubType.BaseType.FullName.IndexOf('`') < 0
+              )
+                sb.AppendLine($"class {stubType.Name}({stubType.BaseType.Name}):");
+            else
+                sb.AppendLine($"class {stubType.Name}:");
+
+            string classStartString = sb.ToString();
+
+            // constructors
+            ConstructorInfo[] constructors = stubType.GetConstructors();
+            // sort for consistent output
+            Array.Sort(constructors, MethodCompare);
+            foreach (var constructor in constructors)
+            {
+                if (constructors.Length > 1)
+                    sb.AppendLine("    @overload");
+                sb.Append("    def __init__(self");
+                var parameters = constructor.GetParameters();
+                for (int i = 0; i < parameters.Length; i++)
+                {
+                    if (0 == i)
+                        sb.Append(", ");
+                    sb.Append($"{SafePythonName(parameters[i].Name)}: {ToPythonType(parameters[i].ParameterType)}");
+                    if (i < (parameters.Length - 1))
+                        sb.Append(", ");
+                }
+                sb.AppendLine("): ...");
+            }
+
+            // methods
+            MethodInfo[] methods = stubType.GetMethods();
+            // sort for consistent output
+            Array.Sort(methods, MethodCompare);
+            Dictionary<string, int> methodNames = new Dictionary<string, int>();
+            foreach (var method in methods)
+            {
+                if (method.GetCustomAttribute(typeof(System.ObsoleteAttribute)) != null)
+                    continue;
+
+                int count;
+                if (methodNames.TryGetValue(method.Name, out count))
+                    count++;
+                else
+                    count = 1;
+                methodNames[method.Name] = count;
+            }
+
+            foreach (var method in methods)
+            {
+                if (method.GetCustomAttribute(typeof(System.ObsoleteAttribute)) != null)
+                    continue;
+
+                if (method.DeclaringType != stubType)
+                    continue;
+                var parameters = method.GetParameters();
+                int outParamCount = 0;
+                int refParamCount = 0;
+                foreach (var p in parameters)
+                {
+                    if (p.IsOut)
+                        outParamCount++;
+                    else if (p.ParameterType.IsByRef)
+                        refParamCount++;
+                }
+                int parameterCount = parameters.Length - outParamCount;
+
+                if (method.IsSpecialName && (method.Name.StartsWith("get_") || method.Name.StartsWith("set_")))
+                {
+                    string propName = method.Name.Substring("get_".Length);
+                    if (method.Name.StartsWith("get_"))
+                        sb.AppendLine("    @property");
+                    else
+                    {
+                        sb.AppendLine($"    @{propName}.setter");
+                    }
+                    sb.Append($"    def {propName}(");
+                }
+                else
+                {
+                    if (methodNames[method.Name] > 1)
+                        sb.AppendLine("    @overload");
+                    sb.Append($"    def {method.Name}(");
+                }
+
+                bool addComma = false;
+                if (!method.IsStatic)
+                {
+                    sb.Append("self");
+                    addComma = true;
+                }
+                for (int i = 0; i < parameters.Length; i++)
+                {
+                    if (parameters[i].IsOut)
+                        continue;
+
+                    if (addComma)
+                        sb.Append(", ");
+
+                    sb.Append($"{SafePythonName(parameters[i].Name)}: {ToPythonType(parameters[i].ParameterType)}");
+                    addComma = true;
+                }
+                sb.Append(")");
+                {
+                    List<string> types = new List<string>();
+                    if (method.ReturnType == typeof(void))
+                    {
+                        if (outParamCount == 0 && refParamCount == 0)
+                            types.Add("None");
+                    }
+                    else
+                        types.Add(ToPythonType(method.ReturnType));
+
+                    foreach (var p in parameters)
+                    {
+                        if (p.IsOut || (p.ParameterType.IsByRef))
+                        {
+                            types.Add(ToPythonType(p.ParameterType));
+                        }
+                    }
+
+                    sb.Append($" -> ");
+                    if (outParamCount == 0 && refParamCount == 0)
+                        sb.Append(types[0]);
+                    else
+                    {
+                        sb.Append("Tuple[");
+                        for (int i = 0; i < types.Count; i++)
+                        {
+                            if (i > 0)
+                                sb.Append(", ");
+                            sb.Append(types[i]);
+                        }
+                        sb.Append("]");
+                    }
+                }
+                sb.AppendLine(": ...");
+            }
+            // If no strings appended, class is empty. add "pass"
+            if (sb.ToString().Length == classStartString.Length)
+            {
+                sb.AppendLine($"    pass");
+            }
+
+
+        }
 
         private static void WriteStubList(DirectoryInfo rootDirectory, string[] allNamespaces, List<Type> stubTypes)
         {
@@ -138,7 +370,7 @@ namespace PyStubblerLib
 
             string[] ns = stubTypes[0].Namespace.Split('.');
             string path = rootDirectory.FullName;
-            for (int i = 1; i < ns.Length; i++)  // review this line - it's skipping singleton namespaces
+            for (int i = 0; i < ns.Length; i++)  // review this line - it's skipping singleton namespaces
                 path = Path.Combine(path, ns[i]);
 
             if (!Directory.Exists(path))
