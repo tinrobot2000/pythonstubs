@@ -2,7 +2,6 @@
 using System.Reflection;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
 using System.Linq;
 
 namespace PyStubblerLib
@@ -187,7 +186,6 @@ namespace PyStubblerLib
                 }
 
                 if (stubType.BaseType != null &&
-                  // stubType.BaseType.FullName.StartsWith(ns[0]) &&
                   stubType.BaseType.FullName.IndexOf('+') < 0 &&
                   stubType.BaseType.FullName.IndexOf('`') < 0
                   )
