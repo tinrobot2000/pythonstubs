@@ -352,15 +352,9 @@ namespace PyStubblerLib
 
                 if (childNamespaces.Length > 0)
                 {
-                    sb.Append("__all__ = [");
-                    for (int i = 0; i < childNamespaces.Length; i++)
-                    {
-                        if (i > 0)
-                            sb.Append(",");
-                        sb.Append($"'{childNamespaces[i]}'");
-                    }
-                    sb.AppendLine("]");
-                    sb.AppendLine();
+                    sb.Append("__all__ = ['");
+                    sb.Append(string.Join("', '", childNamespaces));
+                    sb.AppendLine("']"); 
 
                     File.WriteAllText(filepath, sb.ToString());
                 }
